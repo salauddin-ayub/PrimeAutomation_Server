@@ -2,6 +2,7 @@ const express = require("express")
 const app = express()
 const bcrypt = require("bcrypt")
 const jwt = require("jsonwebtoken")
+const mongodb = require("mongodb")
 
 const { MongoClient } = require("mongodb")
 require("dotenv").config()
@@ -177,40 +178,61 @@ async function run() {
       const result = await categoryProductCollection.deleteOne(query)
       res.json(result)
     })
-    // Add Order API
     app.post("/order", async (req, res) => {
-      const orders = req.body // Access the order data from the request body
+      try {
+        const orders = req.body // Access the order data from the request body
 
-      // Set the default order status as "pending"
-      const ordersWithStatus = orders.map((order) => ({
-        ...order,
-        status: "pending",
-      }))
+        // Set the default order status as "pending" and add the createdDate field with today's date
+        const ordersWithStatusAndDate = orders.map((order) => ({
+          ...order,
+          status: "pending",
+          createdDate: new Date().toISOString(),
+        }))
 
-      // Insert the orders into the orderCollection
-      const result = await orderCollection.insertMany(ordersWithStatus)
+        // Insert the orders into the orderCollection
+        const result = await orderCollection.insertMany(ordersWithStatusAndDate)
 
-      // Retrieve the full order dataset including the generated IDs
-      const fullOrders = await orderCollection.find().toArray()
+        // Retrieve the full order dataset including the generated IDs
+        const fullOrders = await orderCollection.find().toArray()
 
-      res.json(fullOrders)
+        res.json(fullOrders)
+      } catch (error) {
+        console.error("Error creating orders:", error)
+        res.status(500).json({ error: "Failed to create orders" })
+      }
     })
+
     app.get("/orders", async (req, res) => {
-      const orders = await orderCollection.find().toArray()
-      res.json(orders)
+      try {
+        const orders = await orderCollection.find().toArray()
+        res.json(orders)
+      } catch (error) {
+        console.error("Error retrieving orders:", error)
+        res.status(500).json({ error: "Failed to retrieve orders" })
+      }
     })
 
     // Update Order Status
-    app.put("/order/:id/status/:status", async (req, res) => {
-      const orderId = req.params.id
-      const newStatus = req.params.status
+    app.put("/order", async (req, res) => {
+      const { _id, status } = req.body // Access the _id and status from the request body
 
-      const filter = { _id: ObjectId(orderId) }
-      const update = { $set: { status: newStatus } }
+      const filter = { _id } // Use the _id as it is, without converting to ObjectId
+
+      const update = { $set: { status } }
+
+      console.log("Filter:", filter) // Debug statement to check the filter
+      console.log("Update:", update) // Debug statement to check the update
 
       const result = await orderCollection.updateOne(filter, update)
 
-      res.json(result)
+      console.log("Matched count:", result.matchedCount) // Debug statement to check matched count
+
+      if (result.matchedCount === 0) {
+        return res.status(404).json({ error: "Order not found" })
+      }
+
+      const updatedOrder = await orderCollection.findOne(filter)
+      res.json(updatedOrder)
     })
 
     // Get Product Information with Order Status
@@ -338,11 +360,35 @@ async function run() {
         lastName: user.lastName,
         email: user.email,
         id: user._id,
-        role: user.role,
+        role: user.role || "user", // Set default role as "user"
         token: token,
       }
 
       res.status(200).json(userData)
+    })
+
+    app.post("/assign-role", async (req, res) => {
+      const { userId, newRole } = req.body
+
+      try {
+        // Convert the user ID string to ObjectId
+        const userIdObject = new ObjectId(userId)
+
+        // Update the user document in the database
+        const result = await userCollection.updateOne(
+          { _id: userIdObject },
+          { $set: { role: newRole } }
+        )
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json("User not found")
+        }
+
+        res.status(200).json("Role assigned successfully")
+      } catch (error) {
+        console.error("Error assigning role:", error)
+        res.status(500).json("Failed to assign role")
+      }
     })
 
     // Retrieve all users API
