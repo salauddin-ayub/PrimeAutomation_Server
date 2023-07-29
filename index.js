@@ -3,8 +3,10 @@ const app = express()
 const bcrypt = require("bcrypt")
 const jwt = require("jsonwebtoken")
 const mongodb = require("mongodb")
+const { v4: uuidv4 } = require("uuid")
 
 const { MongoClient } = require("mongodb")
+const SSLCommerzPayment = require("sslcommerz-lts")
 require("dotenv").config()
 const ObjectId = require("mongodb").ObjectId
 
@@ -23,6 +25,10 @@ const client = new MongoClient(uri, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
+
+const store_id = process.env.STORE_ID
+const store_passwd = process.env.STORE_PASS
+const is_live = false
 
 async function run() {
   try {
@@ -59,26 +65,36 @@ async function run() {
     })
 
     // Update Product
-    app.put("/medisin", async (req, res) => {
-      const product = req.body
-      const filter = { _id: ObjectId(product?._id) }
-      const options = { upsert: true }
-      const updateDoc = { $set: product }
-      const result = await productCollectionMain.updateOne(
-        filter,
-        updateDoc,
-        options
-      )
-      res.json(result)
+    app.put("/medisin/:id", async (req, res) => {
+      const productId = req.params.id
+      const updatedProduct = req.body
+
+      const filter = { _id: ObjectId(productId) }
+      const updateDoc = { $set: updatedProduct }
+
+      try {
+        const result = await productCollectionMain.updateOne(filter, updateDoc)
+        res.json(result)
+      } catch (error) {
+        console.error("Error updating medisin:", error)
+        res.status(500).json({ error: "Failed to update medisin" })
+      }
     })
 
     //delete product
     app.delete("/medisin/:id", async (req, res) => {
       const id = req.params.id
       const query = { _id: ObjectId(id) }
-      const result = await productCollectionMain.deleteOne(query)
-      res.json(result)
+
+      try {
+        const result = await productCollectionMain.deleteOne(query)
+        res.json(result)
+      } catch (error) {
+        console.error("Error deleting medisin:", error)
+        res.status(500).json({ error: "Failed to delete medisin" })
+      }
     })
+
     // users post api
     app.post("/product", async (req, res) => {
       const product = req.body
@@ -178,27 +194,91 @@ async function run() {
       const result = await categoryProductCollection.deleteOne(query)
       res.json(result)
     })
+    const tran_id = new ObjectId().toString()
     app.post("/order", async (req, res) => {
       try {
         const orders = req.body // Access the order data from the request body
-
-        // Set the default order status as "pending" and add the createdDate field with today's date
         const ordersWithStatusAndDate = orders.map((order) => ({
           ...order,
           status: "pending",
           createdDate: new Date().toISOString(),
         }))
+        console.log("orders", orders)
+        // const result = await orderCollection.insertMany(ordersWithStatusAndDate)
+        // const fullOrders = await orderCollection.find().toArray()
 
-        // Insert the orders into the orderCollection
-        const result = await orderCollection.insertMany(ordersWithStatusAndDate)
-
-        // Retrieve the full order dataset including the generated IDs
-        const fullOrders = await orderCollection.find().toArray()
-
-        res.json(fullOrders)
+        // res.json(fullOrders)
+        const data = {
+          total_amount: ordersWithStatusAndDate?.[0]?.price,
+          currency: "BDT",
+          tran_id: tran_id, // use unique tran_id for each api call
+          success_url: `http://localhost:5000/payment/sucess/${tran_id}`,
+          fail_url: "http://localhost:3030/fail",
+          cancel_url: "http://localhost:3030/cancel",
+          ipn_url: "http://localhost:3030/ipn",
+          shipping_method: "Courier",
+          product_name: "Computer.",
+          product_category: "Electronic",
+          product_profile: "general",
+          cus_name: "Customer Name",
+          cus_email: "customer@example.com",
+          cus_add1: ordersWithStatusAndDate?.[0]?.address,
+          cus_add2: "Dhaka",
+          cus_city: "Dhaka",
+          cus_state: "Dhaka",
+          cus_postcode: "1000",
+          cus_country: "Bangladesh",
+          cus_phone: "01711111111",
+          cus_fax: "01711111111",
+          ship_name: "Customer Name",
+          ship_add1: "Dhaka",
+          ship_add2: "Dhaka",
+          ship_city: "Dhaka",
+          ship_state: "Dhaka",
+          ship_postcode: 1000,
+          ship_country: "Bangladesh",
+        }
+        console.log(data)
+        const sslcz = new SSLCommerzPayment(store_id, store_passwd, is_live)
+        sslcz.init(data).then((apiResponse) => {
+          // Redirect the user to payment gateway
+          let GatewayPageURL = apiResponse.GatewayPageURL
+          res.send({ url: GatewayPageURL })
+          const finalOrder = ordersWithStatusAndDate?.map((item) => {
+            return {
+              ...item,
+              _id: uuidv4(),
+              paidStatus: false,
+              tranjectionId: tran_id,
+            }
+          })
+          console.log("final oreder", finalOrder)
+          const result = orderCollection.insertMany(finalOrder)
+          console.log("Redirecting to: ", GatewayPageURL)
+        })
       } catch (error) {
         console.error("Error creating orders:", error)
         res.status(500).json({ error: "Failed to create orders" })
+      }
+    })
+
+    app.post("/payment/sucess/:tranId", async (req, res) => {
+      console.log(req.params.tranId)
+      const result = await orderCollection.updateMany(
+        { tranjectionId: req.params.tranId },
+        {
+          $set: {
+            paidStatus: true,
+          },
+        }
+      )
+      console.log("result", result)
+      console.log("result.modifiedCount", result.modifiedCount)
+
+      if (result.modifiedCount > 0) {
+        res.redirect(
+          `http://localhost:3000/payment/sucess/${req.params.tranId}`
+        )
       }
     })
 
@@ -217,14 +297,8 @@ async function run() {
       const { _id, status } = req.body // Access the _id and status from the request body
 
       const filter = { _id } // Use the _id as it is, without converting to ObjectId
-
       const update = { $set: { status } }
-
-      console.log("Filter:", filter) // Debug statement to check the filter
-      console.log("Update:", update) // Debug statement to check the update
-
       const result = await orderCollection.updateOne(filter, update)
-
       console.log("Matched count:", result.matchedCount) // Debug statement to check matched count
 
       if (result.matchedCount === 0) {

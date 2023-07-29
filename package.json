@@ -19,7 +19,9 @@
     "mongodb": "^4.13.0",
     "mongose": "^0.0.2-security",
     "nodemon": "^2.0.20",
-    "stripe": "^8.222.0"
+    "sslcommerz-lts": "^1.1.0",
+    "stripe": "^8.222.0",
+    "uuid": "^9.0.0"
   },
   "repository": {
     "type": "git",
